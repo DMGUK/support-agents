@@ -12,11 +12,11 @@ import java.util.List;
 import java.util.Map;
 
 public class ClaudeClient {
-    
-    private static final String API_URL = "https://api.anthropic.com/v1/messages";
-    private static final String MODEL = "claude-sonnet-4-20250514";
-    private static final int MAX_TOKENS = 1024;
-    private static final MediaType JSON_TYPE = MediaType.get("application/json"); 
+
+    private static final String API_URL     = "https://api.anthropic.com/v1/messages";
+    private static final String MODEL       = "claude-sonnet-4-20250514";
+    private static final int    MAX_TOKENS  = 1024;
+    private static final MediaType JSON_TYPE = MediaType.get("application/json");
 
     private final OkHttpClient http;
     private final ObjectMapper mapper;
@@ -56,16 +56,25 @@ public class ClaudeClient {
         return mapper.readTree(post(body));
     }
 
-    // Used by: BillingAgent (second call, after tool execution)
+    // Used by: BillingAgent (second call, single tool result — kept for compatibility)
     public String continueWithToolResult(String systemPrompt,
-                                        List<Message> history,
-                                        JsonNode assistantMessage,
-                                        String toolUseId,
-                                        String toolResult,
-                                        List<Map<String, Object>> tools) throws IOException {
-        // Build a fresh minimal conversation:
-        // just the last user message + assistant tool_use + tool_result
-        // This avoids any stale tool_use blocks from previous turns
+                                          List<Message> history,
+                                          JsonNode assistantMessage,
+                                          String toolUseId,
+                                          String toolResult,
+                                          List<Map<String, Object>> tools) throws IOException {
+        return continueWithAllToolResults(
+                systemPrompt, history, assistantMessage,
+                List.of(toolUseId), List.of(toolResult), tools);
+    }
+
+    // Used by: BillingAgent (second call, handles one or multiple tool results)
+    public String continueWithAllToolResults(String systemPrompt,
+                                              List<Message> history,
+                                              JsonNode assistantMessage,
+                                              List<String> toolUseIds,
+                                              List<String> toolResults,
+                                              List<Map<String, Object>> tools) throws IOException {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", MODEL);
         body.put("max_tokens", MAX_TOKENS);
@@ -73,7 +82,7 @@ public class ClaudeClient {
 
         ArrayNode messages = mapper.createArrayNode();
 
-        // Add only the last user message
+        // Add only the last user message to avoid history contamination
         for (int i = history.size() - 1; i >= 0; i--) {
             Message m = history.get(i);
             if ("user".equals(m.getRole())) {
@@ -85,20 +94,21 @@ public class ClaudeClient {
             }
         }
 
-        // Add assistant turn with tool_use block
+        // Add assistant turn containing all tool_use blocks
         ObjectNode assistantTurn = mapper.createObjectNode();
         assistantTurn.put("role", "assistant");
         assistantTurn.set("content", assistantMessage.path("content"));
         messages.add(assistantTurn);
 
-        // Add tool_result turn
-        ObjectNode toolResultBlock = mapper.createObjectNode();
-        toolResultBlock.put("type", "tool_result");
-        toolResultBlock.put("tool_use_id", toolUseId);
-        toolResultBlock.put("content", toolResult);
-
+        // Add ALL tool_results in a single user turn
         ArrayNode toolResultContent = mapper.createArrayNode();
-        toolResultContent.add(toolResultBlock);
+        for (int i = 0; i < toolUseIds.size(); i++) {
+            ObjectNode toolResultBlock = mapper.createObjectNode();
+            toolResultBlock.put("type", "tool_result");
+            toolResultBlock.put("tool_use_id", toolUseIds.get(i));
+            toolResultBlock.put("content", toolResults.get(i));
+            toolResultContent.add(toolResultBlock);
+        }
 
         ObjectNode userTurn = mapper.createObjectNode();
         userTurn.put("role", "user");
@@ -120,8 +130,9 @@ public class ClaudeClient {
                 return block.path("text").asText();
             }
         }
-        throw new IOException("No text block after tool result: " + root);
+        throw new IOException("No text block after tool results: " + root);
     }
+
     private ObjectNode buildBaseBody(String systemPrompt, List<Message> history) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", MODEL);
@@ -132,8 +143,7 @@ public class ClaudeClient {
         for (Message m : history) {
             String content = m.getContent();
             if (content == null || content.isBlank()) continue;
-            // Skip any messages that look like raw JSON tool responses
-            // (these are internal API artifacts, not real conversation turns)
+            // Skip messages that look like raw JSON tool responses
             if (content.trim().startsWith("{") || content.trim().startsWith("[")) continue;
 
             ObjectNode msg = mapper.createObjectNode();
@@ -144,7 +154,7 @@ public class ClaudeClient {
         body.set("messages", messages);
         return body;
     }
-    
+
     private String post(ObjectNode body) throws IOException {
         RequestBody requestBody = RequestBody.create(
                 mapper.writeValueAsString(body), JSON_TYPE);

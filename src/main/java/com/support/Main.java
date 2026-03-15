@@ -53,6 +53,7 @@ public class Main {
 
             if (userInput.equalsIgnoreCase("exit") || userInput.equalsIgnoreCase("quit")) {
                 System.out.println("Goodbye!");
+                scanner.close();
                 break;
             }
             if (userInput.isEmpty()) continue;

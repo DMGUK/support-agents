@@ -1,7 +1,6 @@
 package com.support.agents;
 
 import com.fasterxml.jackson.databind.JsonNode;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.support.llm.ClaudeClient;
 import com.support.model.Message;
 import com.support.tools.BillingTools;
@@ -12,7 +11,6 @@ import java.util.*;
 public class BillingAgent {
 
     private final ClaudeClient client;
-    private final ObjectMapper mapper = new ObjectMapper();
 
     public BillingAgent(ClaudeClient client) {
         this.client = client;
@@ -23,11 +21,15 @@ public class BillingAgent {
         String systemPrompt = buildSystemPrompt();
         List<Message> turns = filterTurns(history);
 
-        // Call 1 — Claude decides which tool to use
+        // Call 1 — Claude decides which tool(s) to use
         JsonNode response = client.completeWithTools(systemPrompt, turns, tools);
         String stopReason = response.path("stop_reason").asText();
 
         if ("tool_use".equals(stopReason)) {
+            // Collect ALL tool_use blocks — Claude may return more than one
+            List<String> toolUseIds = new ArrayList<>();
+            List<String> toolResults = new ArrayList<>();
+
             for (JsonNode block : response.path("content")) {
                 if ("tool_use".equals(block.path("type").asText())) {
                     String toolName  = block.path("name").asText();
@@ -40,10 +42,15 @@ public class BillingAgent {
                     System.out.println("  [tool_call] " + toolName + "(" + args + ")");
                     String toolResult = BillingTools.dispatch(toolName, args);
 
-                    // Call 2 — feed result back, get final answer
-                    return client.continueWithToolResult(
-                            systemPrompt, turns, response, toolUseId, toolResult, tools);
+                    toolUseIds.add(toolUseId);
+                    toolResults.add(toolResult);
                 }
+            }
+
+            if (!toolUseIds.isEmpty()) {
+                // Call 2 — feed all results back, get final answer
+                return client.continueWithAllToolResults(
+                        systemPrompt, turns, response, toolUseIds, toolResults, tools);
             }
         }
 
@@ -109,12 +116,12 @@ public class BillingAgent {
         List<Message> filtered = new ArrayList<>();
         for (Message m : history) {
             if ("user".equals(m.getRole()) || "assistant".equals(m.getRole())) {
-                if (m.getContent() != null && !m.getContent().isBlank()) {
+                String content = m.getContent();
+                if (content != null && !content.isBlank()) {
                     filtered.add(m);
                 }
             }
         }
-        // Keep only last 6 turns to avoid tool_use conflicts across turns
         if (filtered.size() > 6) {
             return filtered.subList(filtered.size() - 6, filtered.size());
         }
