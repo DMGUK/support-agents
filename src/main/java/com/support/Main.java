@@ -1,7 +1,104 @@
 package com.support;
 
+import com.support.agents.BillingAgent;
+import com.support.agents.TechnicalAgent;
+import com.support.llm.ClaudeClient;
+import com.support.model.AgentType;
+import com.support.model.ConversationSession;
+import com.support.rag.DocumentChunk;
+import com.support.rag.DocumentLoader;
+import com.support.rag.DocumentRetriever;
+import com.support.router.AgentRouter;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.Scanner;
+
 public class Main {
-    public static void main(String[] args) {
-        System.out.println("Hello world!");
+
+    private static final String OUT_OF_SCOPE_REPLY =
+        "I'm sorry, but I cannot assist with that request. " +
+        "Please contact our general support team at support@example.com.";
+
+    public static void main(String[] args) throws IOException {
+        String apiKey = System.getenv("ANTHROPIC_API_KEY");
+        if (apiKey == null || apiKey.isBlank()) {
+            System.err.println("ERROR: ANTHROPIC_API_KEY environment variable is not set.");
+            System.exit(1);
+        }
+
+        String docsPath = args.length > 0 ? args[0] : "docs";
+
+        // --- Bootstrap ---
+        ClaudeClient claude = new ClaudeClient(apiKey);
+
+        List<DocumentChunk> chunks = new DocumentLoader().loadAll(docsPath);
+        DocumentRetriever retriever = new DocumentRetriever(chunks);
+
+        AgentRouter    router         = new AgentRouter(claude);
+        TechnicalAgent technicalAgent = new TechnicalAgent(claude, retriever);
+        BillingAgent   billingAgent   = new BillingAgent(claude);
+
+        ConversationSession session = new ConversationSession();
+
+        // --- Chat loop ---
+        System.out.println("=======================================================");
+        System.out.println("  Conversational Support System — type 'exit' to quit  ");
+        System.out.println("=======================================================\n");
+
+        Scanner scanner = new Scanner(System.in);
+        while (true) {
+            System.out.print("You: ");
+            String userInput = scanner.nextLine().trim();
+
+            if (userInput.equalsIgnoreCase("exit") || userInput.equalsIgnoreCase("quit")) {
+                System.out.println("Goodbye!");
+                break;
+            }
+            if (userInput.isEmpty()) continue;
+
+            session.addMessage("user", userInput);
+
+            try {
+                // 1. Route — but only re-route if no current agent
+                //    or if the new classification is a different known agent
+                AgentType routed = router.route(userInput, session.getHistory());
+                AgentType agentType;
+
+                if (routed == AgentType.OUT_OF_SCOPE && session.getCurrentAgent() != null) {
+                    // User is likely continuing the current conversation
+                    // (e.g. providing a customer ID as follow-up)
+                    agentType = session.getCurrentAgent();
+                } else {
+                    agentType = routed;
+                }
+
+                // 2. Announce switch if agent changed
+                if (agentType != session.getCurrentAgent() && agentType != AgentType.OUT_OF_SCOPE) {
+                    String label = agentType == AgentType.TECHNICAL
+                            ? "Technical Specialist" : "Billing Specialist";
+                    System.out.println("  [Routing to " + label + "]");
+                    session.setCurrentAgent(agentType);
+                }
+
+                // 3. Dispatch
+                String reply = switch (agentType) {
+                    case TECHNICAL    -> technicalAgent.respond(userInput, session.getHistory());
+                    case BILLING      -> billingAgent.respond(userInput, session.getHistory());
+                    case OUT_OF_SCOPE -> {
+                        session.setCurrentAgent(null);
+                        yield OUT_OF_SCOPE_REPLY;
+                    }
+                };
+
+                // 4. Print and persist
+                System.out.println("\nAgent: " + reply + "\n");
+                session.addMessage("assistant", reply);
+
+            } catch (IOException e) {
+                System.err.println("Error: " + e.getMessage());
+                System.out.println("Agent: I'm experiencing a technical issue. Please try again.\n");
+            }
+        }
     }
 }

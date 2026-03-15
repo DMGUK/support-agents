@@ -58,21 +58,40 @@ public class ClaudeClient {
 
     // Used by: BillingAgent (second call, after tool execution)
     public String continueWithToolResult(String systemPrompt,
-                                          List<Message> history,
-                                          JsonNode assistantMessage,
-                                          String toolUseId,
-                                          String toolResult,
-                                          List<Map<String, Object>> tools) throws IOException {
-        ObjectNode body = buildBaseBody(systemPrompt, history);
-        ArrayNode messages = (ArrayNode) body.get("messages");
+                                        List<Message> history,
+                                        JsonNode assistantMessage,
+                                        String toolUseId,
+                                        String toolResult,
+                                        List<Map<String, Object>> tools) throws IOException {
+        // Build a fresh minimal conversation:
+        // just the last user message + assistant tool_use + tool_result
+        // This avoids any stale tool_use blocks from previous turns
+        ObjectNode body = mapper.createObjectNode();
+        body.put("model", MODEL);
+        body.put("max_tokens", MAX_TOKENS);
+        body.put("system", systemPrompt);
 
-        // Append assistant turn (contains the tool_use block)
+        ArrayNode messages = mapper.createArrayNode();
+
+        // Add only the last user message
+        for (int i = history.size() - 1; i >= 0; i--) {
+            Message m = history.get(i);
+            if ("user".equals(m.getRole())) {
+                ObjectNode userMsg = mapper.createObjectNode();
+                userMsg.put("role", "user");
+                userMsg.put("content", m.getContent());
+                messages.add(userMsg);
+                break;
+            }
+        }
+
+        // Add assistant turn with tool_use block
         ObjectNode assistantTurn = mapper.createObjectNode();
         assistantTurn.put("role", "assistant");
         assistantTurn.set("content", assistantMessage.path("content"));
         messages.add(assistantTurn);
 
-        // Append tool_result turn
+        // Add tool_result turn
         ObjectNode toolResultBlock = mapper.createObjectNode();
         toolResultBlock.put("type", "tool_result");
         toolResultBlock.put("tool_use_id", toolUseId);
@@ -86,7 +105,9 @@ public class ClaudeClient {
         userTurn.set("content", toolResultContent);
         messages.add(userTurn);
 
-        // Tools must be included again
+        body.set("messages", messages);
+
+        // Add tools
         ArrayNode toolsNode = mapper.createArrayNode();
         for (Map<String, Object> tool : tools) {
             toolsNode.add(mapper.valueToTree(tool));
@@ -101,7 +122,6 @@ public class ClaudeClient {
         }
         throw new IOException("No text block after tool result: " + root);
     }
-
     private ObjectNode buildBaseBody(String systemPrompt, List<Message> history) {
         ObjectNode body = mapper.createObjectNode();
         body.put("model", MODEL);
@@ -110,15 +130,21 @@ public class ClaudeClient {
 
         ArrayNode messages = mapper.createArrayNode();
         for (Message m : history) {
+            String content = m.getContent();
+            if (content == null || content.isBlank()) continue;
+            // Skip any messages that look like raw JSON tool responses
+            // (these are internal API artifacts, not real conversation turns)
+            if (content.trim().startsWith("{") || content.trim().startsWith("[")) continue;
+
             ObjectNode msg = mapper.createObjectNode();
             msg.put("role", m.getRole());
-            msg.put("content", m.getContent());
+            msg.put("content", content);
             messages.add(msg);
         }
         body.set("messages", messages);
         return body;
     }
-
+    
     private String post(ObjectNode body) throws IOException {
         RequestBody requestBody = RequestBody.create(
                 mapper.writeValueAsString(body), JSON_TYPE);
