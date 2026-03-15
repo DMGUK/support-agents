@@ -14,5 +14,129 @@ import java.util.Map;
 public class ClaudeClient {
     
     private static final String API_URL = "https://api.anthropic.com/v1/messages";
-    
+    private static final String MODEL = "claude-sonnet-4-20250514";
+    private static final int MAX_TOKENS = 1024;
+    private static final MediaType JSON_TYPE = MediaType.get("application/json"); 
+
+    private final OkHttpClient http;
+    private final ObjectMapper mapper;
+    private final String apiKey;
+
+    public ClaudeClient(String apiKey) {
+        this.apiKey  = apiKey;
+        this.http    = new OkHttpClient();
+        this.mapper  = new ObjectMapper();
+    }
+
+    // Used by: AgentRouter, TechnicalAgent
+    public String complete(String systemPrompt, List<Message> history) throws IOException {
+        ObjectNode body = buildBaseBody(systemPrompt, history);
+        JsonNode root = mapper.readTree(post(body));
+
+        for (JsonNode block : root.path("content")) {
+            if ("text".equals(block.path("type").asText())) {
+                return block.path("text").asText();
+            }
+        }
+        throw new IOException("No text block in response: " + root);
+    }
+
+    // Used by: BillingAgent (first call)
+    public JsonNode completeWithTools(String systemPrompt,
+                                       List<Message> history,
+                                       List<Map<String, Object>> tools) throws IOException {
+        ObjectNode body = buildBaseBody(systemPrompt, history);
+
+        ArrayNode toolsNode = mapper.createArrayNode();
+        for (Map<String, Object> tool : tools) {
+            toolsNode.add(mapper.valueToTree(tool));
+        }
+        body.set("tools", toolsNode);
+
+        return mapper.readTree(post(body));
+    }
+
+    // Used by: BillingAgent (second call, after tool execution)
+    public String continueWithToolResult(String systemPrompt,
+                                          List<Message> history,
+                                          JsonNode assistantMessage,
+                                          String toolUseId,
+                                          String toolResult,
+                                          List<Map<String, Object>> tools) throws IOException {
+        ObjectNode body = buildBaseBody(systemPrompt, history);
+        ArrayNode messages = (ArrayNode) body.get("messages");
+
+        // Append assistant turn (contains the tool_use block)
+        ObjectNode assistantTurn = mapper.createObjectNode();
+        assistantTurn.put("role", "assistant");
+        assistantTurn.set("content", assistantMessage.path("content"));
+        messages.add(assistantTurn);
+
+        // Append tool_result turn
+        ObjectNode toolResultBlock = mapper.createObjectNode();
+        toolResultBlock.put("type", "tool_result");
+        toolResultBlock.put("tool_use_id", toolUseId);
+        toolResultBlock.put("content", toolResult);
+
+        ArrayNode toolResultContent = mapper.createArrayNode();
+        toolResultContent.add(toolResultBlock);
+
+        ObjectNode userTurn = mapper.createObjectNode();
+        userTurn.put("role", "user");
+        userTurn.set("content", toolResultContent);
+        messages.add(userTurn);
+
+        // Tools must be included again
+        ArrayNode toolsNode = mapper.createArrayNode();
+        for (Map<String, Object> tool : tools) {
+            toolsNode.add(mapper.valueToTree(tool));
+        }
+        body.set("tools", toolsNode);
+
+        JsonNode root = mapper.readTree(post(body));
+        for (JsonNode block : root.path("content")) {
+            if ("text".equals(block.path("type").asText())) {
+                return block.path("text").asText();
+            }
+        }
+        throw new IOException("No text block after tool result: " + root);
+    }
+
+    private ObjectNode buildBaseBody(String systemPrompt, List<Message> history) {
+        ObjectNode body = mapper.createObjectNode();
+        body.put("model", MODEL);
+        body.put("max_tokens", MAX_TOKENS);
+        body.put("system", systemPrompt);
+
+        ArrayNode messages = mapper.createArrayNode();
+        for (Message m : history) {
+            ObjectNode msg = mapper.createObjectNode();
+            msg.put("role", m.getRole());
+            msg.put("content", m.getContent());
+            messages.add(msg);
+        }
+        body.set("messages", messages);
+        return body;
+    }
+
+    private String post(ObjectNode body) throws IOException {
+        RequestBody requestBody = RequestBody.create(
+                mapper.writeValueAsString(body), JSON_TYPE);
+
+        Request request = new Request.Builder()
+                .url(API_URL)
+                .header("x-api-key", apiKey)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .post(requestBody)
+                .build();
+
+        try (Response response = http.newCall(request).execute()) {
+            String responseBody = response.body() != null ? response.body().string() : "";
+            if (!response.isSuccessful()) {
+                throw new IOException("API error " + response.code() + ": " + responseBody);
+            }
+            return responseBody;
+        }
+    }
 }
