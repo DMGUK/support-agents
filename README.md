@@ -20,9 +20,9 @@ AgentRouter          ← classifies intent using Claude (TECHNICAL / BILLING / O
 
 ### Agent A — Technical Specialist
 Answers questions using a small set of local documentation files.
-Relevant paragraphs are retrieved via keyword overlap scoring and injected into the
-system prompt. Claude is strictly instructed to answer only from those excerpts —
-no hallucination allowed.
+Relevant paragraphs are retrieved via semantic similarity (cosine similarity on ONNX embeddings)
+and injected into the system prompt. Claude is strictly instructed to answer only from those
+excerpts — no hallucination allowed.
 
 ### Agent B — Billing Specialist
 Handles billing questions using tool-calling. Claude decides which backend function
@@ -34,12 +34,19 @@ Classifies every user message using Claude with a strict one-word output prompt.
 Uses the last 4 messages as context to correctly handle follow-up messages like
 providing a customer ID after being asked for one.
 
+### Semantic Search (this branch)
+Uses DJL (Deep Java Library) with ONNX Runtime to run the
+`all-MiniLM-L6-v2` sentence transformer model locally.
+No external API key required — the model is downloaded once (~90MB)
+and cached at `~/.cache/support-agents/`.
+
 ---
 
 ## Tech Stack
 
 - **Language:** Java 21
 - **LLM:** Claude Sonnet (Anthropic API)
+- **Embeddings:** ONNX Runtime + DJL HuggingFace tokenizers (local, no API key)
 - **HTTP client:** OkHttp 4.12
 - **JSON:** Jackson 2.17
 - **Build:** Maven
@@ -48,33 +55,46 @@ No agentic frameworks used. All orchestration is implemented manually.
 
 ---
 
+## Branches
+
+| Branch | Embeddings | Requires |
+|--------|-----------|---------|
+| `main` | OpenAI `text-embedding-3-small` | `OPENAI_API_KEY` |
+| `feature/djl-local-embeddings` | DJL local ONNX model | Nothing extra |
+
+Both branches fall back to keyword search if the embedding provider is unavailable.
+
+---
+
 ## Project Structure
 ```
 demo/
-├── docs/                          # Technical documentation (4 files)
+├── docs/
 │   ├── setup-guide.md
 │   ├── api-reference.md
 │   ├── troubleshooting.md
 │   └── hubspot-integration.md
 ├── src/main/java/com/support/
-│   ├── Main.java                  # Entry point and chat loop
+│   ├── Main.java
 │   ├── model/
 │   │   ├── Message.java
 │   │   ├── AgentType.java
 │   │   └── ConversationSession.java
 │   ├── llm/
-│   │   └── ClaudeClient.java      # Anthropic API wrapper
+│   │   └── ClaudeClient.java
 │   ├── router/
-│   │   └── AgentRouter.java       # LLM-based intent classifier
+│   │   └── AgentRouter.java
 │   ├── rag/
 │   │   ├── DocumentChunk.java
 │   │   ├── DocumentLoader.java
-│   │   └── DocumentRetriever.java # Keyword overlap scorer
+│   │   ├── DocumentRetriever.java       ← keyword fallback
+│   │   ├── DJLEmbeddingClient.java      ← ONNX local embeddings
+│   │   └── DJLSemanticDocumentRetriever.java
 │   ├── agents/
 │   │   ├── TechnicalAgent.java
 │   │   └── BillingAgent.java
 │   └── tools/
-│       └── BillingTools.java      # Mock billing backend (5 functions)
+│       └── BillingTools.java
 └── pom.xml
 ```
 
@@ -85,6 +105,7 @@ demo/
 - Java 21+
 - Maven 3.8+
 - Anthropic API key
+- Internet connection on first run (downloads ~90MB ONNX model, then cached)
 
 ---
 
@@ -94,36 +115,20 @@ demo/
 ```bash
 git clone https://github.com/DMGUK/support-agents.git
 cd support-agents/demo
+git checkout feature/djl-local-embeddings
 ```
 
-### 2. Set your API key
-
-**Linux / macOS:**
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-```
-
-**Windows (PowerShell):**
-```powershell
-$env:ANTHROPIC_API_KEY="sk-ant-..."
-```
+### 2. Set your Anthropic API key
 
 **Windows (permanent):**
 Go to Start → Search "Environment Variables" → User variables → New
 - Name: `ANTHROPIC_API_KEY`
 - Value: `sk-ant-...`
 
-### 2b. Set your OpenAI API key (optional — enables semantic search)
-
-The system uses OpenAI embeddings for semantic search in the Technical Specialist agent.
-If not set, it falls back to keyword search automatically.
-
-**Windows (permanent):**
-Go to Start → Search "Environment Variables" → User variables → New
-- Name: `OPENAI_API_KEY`
-- Value: `sk-...`
-
-Get a key at: https://platform.openai.com/api-keys
+**Linux / macOS:**
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+```
 
 ### 3. Build
 ```bash
@@ -134,6 +139,9 @@ mvn clean package
 ```bash
 java -jar target/support-agents.jar
 ```
+
+On first run the ONNX model and tokenizer are downloaded and cached.
+Subsequent runs start instantly.
 
 Type `exit` or `quit` to end the session.
 
@@ -148,8 +156,6 @@ Type `exit` or `quit` to end the session.
 | `open_refund_request` | Opens a refund case, returns case ID |
 | `send_refund_form` | Sends refund form to customer email |
 | `get_refund_policy` | Eligibility, timelines, exceptions |
-
-All tools return mock data. Replace `BillingTools.java` implementations for real DB/API calls.
 
 ---
 

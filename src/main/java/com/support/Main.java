@@ -92,24 +92,17 @@ public class Main {
     }
 
     private static TechnicalAgent.Retriever buildRetriever(List<DocumentChunk> chunks) {
-        String openAiKey = System.getenv("OPENAI_API_KEY");
-        if (openAiKey != null && !openAiKey.isBlank()) {
-            try {
-                EmbeddingClient embeddingClient = new EmbeddingClient(openAiKey);
-                SemanticDocumentRetriever semantic =
-                        new SemanticDocumentRetriever(chunks, embeddingClient);
-                System.out.println("[Retriever] Semantic search enabled (OpenAI embeddings)");
-                return semantic::retrieve;
-            } catch (Exception e) {
-                System.err.println("[Retriever] OpenAI embeddings failed: " + e.getMessage());
-                System.err.println("[Retriever] Falling back to keyword search.");
-            }
-        } else {
-            System.out.println("[Retriever] OPENAI_API_KEY not set — using keyword search.");
-            System.out.println("[Retriever] Set OPENAI_API_KEY to enable semantic search.");
+        try {
+            DJLEmbeddingClient djlClient = new DJLEmbeddingClient();
+            DJLSemanticDocumentRetriever djlRetriever =
+                    new DJLSemanticDocumentRetriever(chunks, djlClient);
+            System.out.println("[Retriever] Semantic search enabled (DJL local embeddings)");
+            return djlRetriever::retrieve;
+        } catch (Exception e) {
+            System.err.println("[Retriever] DJL failed to load: " + e.getMessage());
+            System.err.println("[Retriever] Falling back to keyword search.");
+            DocumentRetriever keyword = new DocumentRetriever(chunks);
+            return keyword::retrieve;
         }
-
-        DocumentRetriever keyword = new DocumentRetriever(chunks);
-        return keyword::retrieve;
     }
 }

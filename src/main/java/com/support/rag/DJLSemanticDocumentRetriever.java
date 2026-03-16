@@ -1,27 +1,27 @@
 package com.support.rag;
 
-import java.io.IOException;
 import java.util.*;
 
-public class SemanticDocumentRetriever {
+public class DJLSemanticDocumentRetriever {
 
     private final List<DocumentChunk> chunks;
     private final List<float[]> chunkVectors;
-    private final EmbeddingClient embeddingClient;
+    private final DJLEmbeddingClient embeddingClient;
 
-    public SemanticDocumentRetriever(List<DocumentChunk> chunks,
-                                      EmbeddingClient embeddingClient) throws IOException {
+    public DJLSemanticDocumentRetriever(List<DocumentChunk> chunks,
+                                         DJLEmbeddingClient embeddingClient) throws Exception {
         this.chunks          = chunks;
         this.embeddingClient = embeddingClient;
 
         System.out.println("Computing embeddings for " + chunks.size() + " chunks...");
-        List<String> texts = new ArrayList<>();
-        for (DocumentChunk chunk : chunks) texts.add(chunk.getContent());
-        this.chunkVectors = embeddingClient.embedBatch(texts);
+        this.chunkVectors = new ArrayList<>();
+        for (DocumentChunk chunk : chunks) {
+            chunkVectors.add(embeddingClient.embed(chunk.getContent()));
+        }
         System.out.println("Embeddings ready.");
     }
 
-    public List<DocumentChunk> retrieve(String query, int topK) throws IOException {
+    public List<DocumentChunk> retrieve(String query, int topK) throws Exception {
         float[] queryVector = embeddingClient.embed(query);
 
         List<Map.Entry<DocumentChunk, Double>> scored = new ArrayList<>();
@@ -39,7 +39,6 @@ public class SemanticDocumentRetriever {
         return results;
     }
 
-    // cosine similarity = dot product / (magnitude A * magnitude B)
     private double cosineSimilarity(float[] a, float[] b) {
         double dotProduct = 0.0;
         double normA      = 0.0;
