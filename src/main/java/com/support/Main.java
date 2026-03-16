@@ -5,9 +5,7 @@ import com.support.agents.TechnicalAgent;
 import com.support.llm.ClaudeClient;
 import com.support.model.AgentType;
 import com.support.model.ConversationSession;
-import com.support.rag.DocumentChunk;
-import com.support.rag.DocumentLoader;
-import com.support.rag.DocumentRetriever;
+import com.support.rag.*;
 import com.support.router.AgentRouter;
 
 import java.io.IOException;
@@ -29,19 +27,16 @@ public class Main {
 
         String docsPath = args.length > 0 ? args[0] : "docs";
 
-        // --- Bootstrap ---
         ClaudeClient claude = new ClaudeClient(apiKey);
-
         List<DocumentChunk> chunks = new DocumentLoader().loadAll(docsPath);
-        DocumentRetriever retriever = new DocumentRetriever(chunks);
+
+        TechnicalAgent.Retriever retriever = buildRetriever(chunks);
 
         AgentRouter    router         = new AgentRouter(claude);
         TechnicalAgent technicalAgent = new TechnicalAgent(claude, retriever);
         BillingAgent   billingAgent   = new BillingAgent(claude);
+        ConversationSession session   = new ConversationSession();
 
-        ConversationSession session = new ConversationSession();
-
-        // --- Chat loop ---
         System.out.println("=======================================================");
         System.out.println("  Conversational Support System — type 'exit' to quit  ");
         System.out.println("=======================================================\n");
@@ -61,20 +56,15 @@ public class Main {
             session.addMessage("user", userInput);
 
             try {
-                // 1. Route — but only re-route if no current agent
-                //    or if the new classification is a different known agent
                 AgentType routed = router.route(userInput, session.getHistory());
                 AgentType agentType;
 
                 if (routed == AgentType.OUT_OF_SCOPE && session.getCurrentAgent() != null) {
-                    // User is likely continuing the current conversation
-                    // (e.g. providing a customer ID as follow-up)
                     agentType = session.getCurrentAgent();
                 } else {
                     agentType = routed;
                 }
 
-                // 2. Announce switch if agent changed
                 if (agentType != session.getCurrentAgent() && agentType != AgentType.OUT_OF_SCOPE) {
                     String label = agentType == AgentType.TECHNICAL
                             ? "Technical Specialist" : "Billing Specialist";
@@ -82,7 +72,6 @@ public class Main {
                     session.setCurrentAgent(agentType);
                 }
 
-                // 3. Dispatch
                 String reply = switch (agentType) {
                     case TECHNICAL    -> technicalAgent.respond(userInput, session.getHistory());
                     case BILLING      -> billingAgent.respond(userInput, session.getHistory());
@@ -92,7 +81,6 @@ public class Main {
                     }
                 };
 
-                // 4. Print and persist
                 System.out.println("\nAgent: " + reply + "\n");
                 session.addMessage("assistant", reply);
 
@@ -101,5 +89,27 @@ public class Main {
                 System.out.println("Agent: I'm experiencing a technical issue. Please try again.\n");
             }
         }
+    }
+
+    private static TechnicalAgent.Retriever buildRetriever(List<DocumentChunk> chunks) {
+        String openAiKey = System.getenv("OPENAI_API_KEY");
+        if (openAiKey != null && !openAiKey.isBlank()) {
+            try {
+                EmbeddingClient embeddingClient = new EmbeddingClient(openAiKey);
+                SemanticDocumentRetriever semantic =
+                        new SemanticDocumentRetriever(chunks, embeddingClient);
+                System.out.println("[Retriever] Semantic search enabled (OpenAI embeddings)");
+                return semantic::retrieve;
+            } catch (Exception e) {
+                System.err.println("[Retriever] OpenAI embeddings failed: " + e.getMessage());
+                System.err.println("[Retriever] Falling back to keyword search.");
+            }
+        } else {
+            System.out.println("[Retriever] OPENAI_API_KEY not set — using keyword search.");
+            System.out.println("[Retriever] Set OPENAI_API_KEY to enable semantic search.");
+        }
+
+        DocumentRetriever keyword = new DocumentRetriever(chunks);
+        return keyword::retrieve;
     }
 }

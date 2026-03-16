@@ -18,6 +18,8 @@ public class AgentRouter {
               TECHNICAL    — setup, configuration, integrations, APIs, errors, bugs.
               BILLING      — charges, invoices, plans, pricing, refunds, payments, customer IDs.
               OUT_OF_SCOPE — does not fit either category.
+            IMPORTANT: Questions about API rate limits, endpoints, or technical documentation
+            are TECHNICAL even if they mention plan names like Pro or Enterprise.
             IMPORTANT: If the user is continuing an existing conversation (e.g. providing
             a customer ID, answering a follow-up question), classify based on the topic
             of the ongoing conversation, not just the latest message alone.

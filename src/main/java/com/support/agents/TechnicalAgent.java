@@ -3,26 +3,37 @@ package com.support.agents;
 import com.support.llm.ClaudeClient;
 import com.support.model.Message;
 import com.support.rag.DocumentChunk;
-import com.support.rag.DocumentRetriever;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-
 public class TechnicalAgent {
+
     private static final int TOP_K = 3;
 
     private final ClaudeClient client;
-    private final DocumentRetriever retriever;
+    private final Retriever retriever;
 
-    public TechnicalAgent(ClaudeClient client, DocumentRetriever retriever) {
+    @FunctionalInterface
+    public interface Retriever {
+        List<DocumentChunk> retrieve(String query, int topK) throws Exception;
+    }
+
+    public TechnicalAgent(ClaudeClient client, Retriever retriever) {
         this.client    = client;
         this.retriever = retriever;
     }
 
     public String respond(String userMessage, List<Message> history) throws IOException {
-        List<DocumentChunk> relevant = retriever.retrieve(userMessage, TOP_K);
+        List<DocumentChunk> relevant;
+        try {
+            relevant = retriever.retrieve(userMessage, TOP_K);
+        } catch (Exception e) {
+            System.err.println("Retriever error: " + e.getMessage());
+            relevant = List.of();
+        }
+
         String systemPrompt = buildSystemPrompt(relevant);
         List<Message> turns = filterTurns(history);
         return client.complete(systemPrompt, turns);
