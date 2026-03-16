@@ -113,6 +113,18 @@ Go to Start → Search "Environment Variables" → User variables → New
 - Name: `ANTHROPIC_API_KEY`
 - Value: `sk-ant-...`
 
+### 2b. Set your OpenAI API key (optional — enables semantic search)
+
+The system uses OpenAI embeddings for semantic search in the Technical Specialist agent.
+If not set, it falls back to keyword search automatically.
+
+**Windows (permanent):**
+Go to Start → Search "Environment Variables" → User variables → New
+- Name: `OPENAI_API_KEY`
+- Value: `sk-...`
+
+Get a key at: https://platform.openai.com/api-keys
+
 ### 3. Build
 ```bash
 mvn clean package
